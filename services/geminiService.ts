@@ -5,7 +5,7 @@ import { FortuneResult } from "../types";
 const getAIInstance = () => {
   const apiKey = process.env.API_KEY;
   if (!apiKey || apiKey === '' || apiKey === 'undefined') {
-    throw new Error("Thiếu API_KEY. Hãy kiểm tra Environment Variables trên Vercel.");
+    throw new Error("Thiếu API_KEY. Hãy cấu hình trong Environment Variables.");
   }
   return new GoogleGenAI({ apiKey });
 };
@@ -37,21 +37,25 @@ export const getFortune = async (userBirthYear: string, userQuestion: string): P
   return JSON.parse(text);
 };
 
-export const generateTetGreetingCard = async (description: string): Promise<string | null> => {
-  // Model Pro Image yêu cầu instance mới với key hiện tại
+export const generateTetGreetingCard = async (description: string, isHighQuality: boolean = false): Promise<string | null> => {
+  // Tạo instance mới để đảm bảo lấy API Key mới nhất từ trình duyệt nếu người dùng vừa chọn
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  
+  // Model 2.5 Flash Image có hạn mức (quota) lớn hơn nhiều so với 3.0 Pro Image
+  const modelName = isHighQuality ? 'gemini-3-pro-image-preview' : 'gemini-2.5-flash-image';
+  
   const prompt = `A breathtaking, high-quality cinematic digital art for 2026 Vietnamese Lunar New Year (Year of the Horse). Artistic style: modern mixed with traditional lacquer painting. Scene: ${description}. Vibrant red and gold theme, blooming apricot blossoms, festive atmosphere, ultra-detailed.`;
   
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-3-pro-image-preview',
+      model: modelName,
       contents: {
         parts: [{ text: prompt }]
       },
       config: {
         imageConfig: {
           aspectRatio: "1:1",
-          imageSize: "1K"
+          ...(isHighQuality ? { imageSize: "1K" } : {})
         }
       }
     });
@@ -65,11 +69,17 @@ export const generateTetGreetingCard = async (description: string): Promise<stri
     }
     return null;
   } catch (error: any) {
+    const errorStr = JSON.stringify(error);
     console.error("Image Gen Error:", error);
-    if (error.message?.includes("entity was not found")) {
-      throw new Error("KEY_NOT_FOUND");
+    
+    // Phân loại lỗi chính xác
+    if (errorStr.includes("429") || errorStr.includes("RESOURCE_EXHAUSTED") || errorStr.includes("quota")) {
+      throw new Error("QUOTA_EXCEEDED");
     }
-    throw error;
+    if (errorStr.includes("404") || errorStr.includes("not found")) {
+      throw new Error("MODEL_NOT_FOUND");
+    }
+    throw new Error(error.message || "Lỗi không xác định khi tạo ảnh.");
   }
 };
 
@@ -101,51 +111,6 @@ export const getGiftAdvice = async (recipient: string, budget: string): Promise<
   return response.text || "Đang chuẩn bị ý tưởng...";
 };
 
-export const generateTetWish = async (recipient: string, style: string): Promise<string> => {
-  const ai = getAIInstance();
-  const response = await ai.models.generateContent({
-    model: 'gemini-3-flash-preview',
-    contents: `Viết một lời chúc Tết 2026 ngắn gọn cho ${recipient} phong cách ${style}.`
-  });
-  return response.text || "Chúc mừng năm mới!";
-};
-
-export const generateTetPoetry = async (theme: string, type: 'couplet' | 'poem'): Promise<string> => {
-  const ai = getAIInstance();
-  const prompt = type === 'couplet' 
-    ? `Sáng tác cặp câu đối Tết 2026 về: ${theme}.`
-    : `Viết bài thơ lục bát ngắn mừng Xuân 2026 về: ${theme}.`;
-
-  const response = await ai.models.generateContent({
-    model: 'gemini-3-flash-preview',
-    contents: prompt
-  });
-  return response.text || "Vạn sự như ý";
-};
-
-// Fix: Added analyzeTetFood function to handle image analysis of Tet food
-export const analyzeTetFood = async (base64Data: string): Promise<string> => {
-  const ai = getAIInstance();
-  const response = await ai.models.generateContent({
-    model: 'gemini-3-flash-preview',
-    contents: {
-      parts: [
-        {
-          inlineData: {
-            mimeType: 'image/jpeg',
-            data: base64Data,
-          },
-        },
-        {
-          text: "Phân tích món ăn trong ảnh này. Đây có phải là món ăn truyền thống ngày Tết Việt Nam không? Hãy giải thích ý nghĩa, nguồn gốc và cách chế biến sơ lược. Trả lời bằng tiếng Việt, giọng điệu ấm cúng, tinh tế."
-        }
-      ]
-    },
-  });
-  return response.text || "Không thể phân tích món ăn lúc này.";
-};
-
-// Fix: Added findFlowerMarkets function to search for markets using Google Maps grounding
 export const findFlowerMarkets = async (lat: number, lng: number) => {
   const ai = getAIInstance();
   const response = await ai.models.generateContent({
@@ -170,7 +135,6 @@ export const findFlowerMarkets = async (lat: number, lng: number) => {
   };
 };
 
-// Fix: Added getZodiacCompatibility function to provide zodiac advice for 2026
 export const getZodiacCompatibility = async (year: string): Promise<string> => {
   const ai = getAIInstance();
   const response = await ai.models.generateContent({
@@ -178,4 +142,39 @@ export const getZodiacCompatibility = async (year: string): Promise<string> => {
     contents: `Tôi sinh năm ${year}. Trong năm Bính Ngọ 2026, hãy phân tích xem tôi nên chọn người tuổi gì để xông đất mang lại may mắn và tài lộc cho gia đình. Giải thích lý do dựa trên Thiên can, Địa chi và Ngũ hành của năm Bính Ngọ. Trả lời bằng tiếng Việt trang trọng.`
   });
   return response.text || "Đang xem xét vận trình của bạn...";
+};
+
+// Fix: Thêm hàm sáng tác thơ Tết và câu đối
+export const generateTetPoetry = async (theme: string, type: 'couplet' | 'poem'): Promise<string> => {
+  const ai = getAIInstance();
+  const prompt = type === 'couplet' 
+    ? `Hãy sáng tác một cặp câu đối Tết Bính Ngọ 2026 về chủ đề: ${theme}. Trình bày 2 dòng, mỗi dòng một vế đối xứng nhau. Trả lời bằng tiếng Việt.`
+    : `Hãy sáng tác một bài thơ lục bát chúc Tết Bính Ngọ 2026 về chủ đề: ${theme}. Bài thơ mang âm hưởng vui tươi, hy vọng. Trả lời bằng tiếng Việt.`;
+    
+  const response = await ai.models.generateContent({
+    model: 'gemini-3-flash-preview',
+    contents: prompt
+  });
+  return response.text || "Bút sa gà chết, ý thơ chưa thành...";
+};
+
+// Fix: Thêm hàm phân tích món ăn ngày Tết từ hình ảnh
+export const analyzeTetFood = async (base64Data: string): Promise<string> => {
+  const ai = getAIInstance();
+  const imagePart = {
+    inlineData: {
+      mimeType: 'image/jpeg',
+      data: base64Data,
+    },
+  };
+  const textPart = {
+    text: "Đây là món ăn gì trong mâm cỗ Tết Việt Nam? Hãy phân tích ý nghĩa, nguồn gốc và cách chế biến đặc trưng của nó cho dịp Tết Bính Ngọ 2026. Trả lời bằng tiếng Việt, súc tích và hấp dẫn."
+  };
+  
+  const response = await ai.models.generateContent({
+    model: 'gemini-3-flash-preview',
+    contents: { parts: [imagePart, textPart] },
+  });
+  
+  return response.text || "Chưa thể nhận diện được tinh hoa ẩm thực này...";
 };
